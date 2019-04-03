@@ -165,6 +165,8 @@ cdef class OsContextBase(object):
     @mc
     def PolygonMode(self, face, mode): _glPolygonMode(face, mode)
     @mc
+    def CullFace(self, mode): _glCullFace(mode)
+    @mc
     def PolygonOffset(self, factor, units): _glPolygonOffset(factor, units)
     @mc
     def Disable(self, what): _glDisable(what)

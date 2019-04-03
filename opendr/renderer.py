@@ -7,7 +7,7 @@ Author(s): Matthew Loper
 See LICENCE.txt for licensing and contact information.
 """
 
-__all__ = ['ColoredRenderer', 'TexturedRenderer', 'DepthRenderer']
+__all__ = ['ColoredRenderer', 'TexturedRenderer', 'DepthRenderer', 'MapsRenderer']
 
 import numpy as np
 from .cvwrap import cv2
@@ -15,6 +15,7 @@ import time
 import platform
 import scipy.sparse as sp
 from copy import deepcopy
+from .geometry import VertNormals
 from . import common
 from .common import draw_visibility_image, draw_barycentric_image, draw_colored_primitives, draw_texcoord_image
 from .topology import get_vertices_per_edge, get_faces_per_edge
@@ -594,7 +595,41 @@ class TexturedRenderer(ColoredRenderer):
         # result[:,:,1] = 1. - result[:,:,1]
         # return result
 
+class MapsRenderer(ColoredRenderer):
+    def __init__(self, *args, **kwargs):
+        super(MapsRenderer, self).__init__(*args, **kwargs)
 
+    def draw_normal_image(self, normal_colors):
+        """Draws normal map. Certain CullFace mode (BACK / FRONT) must be
+        set before calling this function.
+        """
+        gl = self.glf
+        gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        gl.Enable(GL_CULL_FACE)
+        draw_colored_primitives(self.glf, self.v.r.reshape((-1, 3)), self.f, normal_colors)
+        gl.Disable(GL_CULL_FACE)
+        return np.asarray(deepcopy(self.glf.getImage()), np.float64)
+
+    @depends_on('v', 'f', 'frustum', 'camera')
+    def normal_front_image(self):
+        """Draws normal map for the front side"""
+        tmp = self.camera.r
+        colors = VertNormals(self.v, self.f).r[self.f.ravel()]
+        colors[:, :2] = colors[:, :2] * 0.5 + 0.5
+        colors[:, 2] = 1 - colors[:, 2].clip(0, 1)
+        self.glf.CullFace(GL_FRONT)
+        image = self.draw_normal_image(colors)
+        return image
+
+    @depends_on('v', 'f', 'frustum', 'camera')
+    def normal_back_image(self):
+        """Draws normal map for the back side"""
+        tmp = self.camera.r
+        colors = VertNormals(self.v, self.f).r[self.f.ravel()]
+        colors[:, :2] = colors[:, :2] * 0.5 + 0.5
+        colors[:, 2] = colors[:, 2].clip(-1, 0) + 1
+        self.glf.CullFace(GL_BACK)
+        return self.draw_normal_image(colors)
 
 
 def draw_edge_visibility(gl, v, e, f, hidden_wireframe=True):
