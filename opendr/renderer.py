@@ -700,6 +700,66 @@ class MapsRenderer(ColoredRenderer):
 
         return depth_surface
 
+    @depends_on('f', 'frustum', 'camera', 'overdraw')
+    def barycentric_front_image(self):
+        self._call_on_changed()
+        return draw_barycentric_image(self.glf, self.v.r, self.f, self.boundarybool_image if self.overdraw else None)
+
+    @depends_on('f', 'frustum', 'camera', 'overdraw')
+    def barycentric_back_image(self):
+        self._call_on_changed()
+        self.glf.Enable(GL_CULL_FACE)
+        image = draw_barycentric_image(self.glf, self.v.r, self.f, self.boundarybool_image if self.overdraw else None)
+        self.glf.Disable(GL_CULL_FACE)
+        return image
+
+    @depends_on('f', 'frustum', 'camera', 'overdraw')
+    def faces_front_image(self):
+        """Draws 3-channeled image, in which first two channels decode face index
+        I.e. first channel is (face >> 8) & 255, second one is just (face & 255)
+        In the case when there are more than 65535 faces, information will be lost
+        """
+        self._call_on_changed()
+        tmp = self.camera.r
+        colors = np.hstack((np.arange(self.f.shape[0])[:, np.newaxis],
+                            np.arange(self.f.shape[0])[:, np.newaxis],
+                            np.zeros((self.f.shape[0], 1)))).astype(int)
+        colors[:, 0] = (colors[:, 0] >> 8) & 255
+        colors[:, 1] = colors[:, 1] & 255
+        self.glf.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        draw_colored_primitives(self.glf, self.v.r.reshape((-1, 3)), self.f, colors.astype(np.uint8))
+        return np.asarray(deepcopy(self.glf.getImage()), np.float64)
+
+    @depends_on('f', 'frustum', 'camera', 'overdraw')
+    def faces_back_image(self):
+        self._call_on_changed()
+        tmp = self.camera.r
+        colors = np.hstack((np.arange(self.f.shape[0])[:, np.newaxis],
+                            np.arange(self.f.shape[0])[:, np.newaxis],
+                            np.zeros((self.f.shape[0], 1)))).astype(int)
+        colors[:, 0] = (colors[:, 0] >> 8) & 255
+        colors[:, 1] = colors[:, 1] & 255
+        self.glf.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        self.glf.Enable(GL_CULL_FACE)
+        draw_colored_primitives(self.glf, self.v.r.reshape((-1, 3)), self.f, colors.astype(np.uint8))
+        self.glf.Disable(GL_CULL_FACE)
+        return np.asarray(deepcopy(self.glf.getImage()), np.float64)
+
+    def faces_barycentric_merged(self, is_front):
+        """Combines faces image and barycentric image into 4-channeled image.
+        First two channels (0, 1) is face, decoded into two bytes (see faces_back_image / faces_front_image).
+        Second two channels (2, 3) are two barycentric coordinates
+        """
+        bary_map = self.barycentric_front_image if is_front else self.barycentric_back_image
+        faces_map = self.faces_front_image if is_front else self.faces_back_image
+        image = np.concatenate((faces_map[:, :, :2], bary_map[:, :, [1, 2]]), axis=2)
+
+        # FIXME: Temporary. Making image BGR, since saving is RGB now. All algos are used to reading BGR
+        image = image[:, :, [2, 1, 0, 3]]
+
+        return image
+
+
 
 def draw_edge_visibility(gl, v, e, f, hidden_wireframe=True):
     """Assumes camera is set up correctly in gl context."""
