@@ -599,6 +599,10 @@ class MapsRenderer(ColoredRenderer):
     def __init__(self, *args, **kwargs):
         super(MapsRenderer, self).__init__(*args, **kwargs)
 
+    @depends_on('f', 'frustum', 'background_image', 'overdraw', 'num_channels', 'vc', 'camera', 'bgcolor')
+    def mask(self):
+        return ~np.all(self.r == self.bgcolor.r, axis=2)
+
     def draw_normal_image(self, normal_colors):
         """Draws normal map. Certain CullFace mode (BACK / FRONT) must be
         set before calling this function.
@@ -612,8 +616,7 @@ class MapsRenderer(ColoredRenderer):
 
     @depends_on('v', 'f', 'frustum', 'camera')
     def normal_front_image(self):
-        """Draws normal map for the front side"""
-        tmp = self.camera.r
+        _ = self.camera.r
         colors = VertNormals(self.v, self.f).r[self.f.ravel()]
         colors[:, :2] = colors[:, :2] * 0.5 + 0.5
         colors[:, 2] = 1 - colors[:, 2].clip(0, 1)
@@ -623,13 +626,79 @@ class MapsRenderer(ColoredRenderer):
 
     @depends_on('v', 'f', 'frustum', 'camera')
     def normal_back_image(self):
-        """Draws normal map for the back side"""
-        tmp = self.camera.r
+        _ = self.camera.r
         colors = VertNormals(self.v, self.f).r[self.f.ravel()]
         colors[:, :2] = colors[:, :2] * 0.5 + 0.5
         colors[:, 2] = colors[:, 2].clip(-1, 0) + 1
         self.glf.CullFace(GL_BACK)
         return self.draw_normal_image(colors)
+
+    @depends_on('f', 'frustum', 'background_image','overdraw','camera', 'v')
+    def depth_map_front(self):
+        _ = self.camera.r
+        gl = self.glf
+        gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        gl.PolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        gl.Disable(GL_CULL_FACE)
+        draw_noncolored_verts(gl, self.camera.v.r, self.f)
+        result = np.asarray(deepcopy(gl.getDepth()), np.float64)
+
+        if self.overdraw:
+            gl.PolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            draw_noncolored_verts(gl, self.camera.v.r, self.f)
+            overdraw = np.asarray(deepcopy(gl.getDepth()), np.float64)
+            gl.PolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+            boundarybool_image = self.boundarybool_image
+            result = overdraw*boundarybool_image + result*(1-boundarybool_image)
+        result = result.reshape((self.frustum['height'], self.frustum['width']))
+        return result
+
+    @depends_on('f', 'frustum', 'background_image','overdraw','camera', 'v')
+    def depth_map_back(self):
+        _ = self.camera.r
+        gl = self.glf
+        gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        gl.PolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        gl.Enable(GL_CULL_FACE)
+        draw_noncolored_verts(gl, self.camera.v.r, self.f)
+        result = np.asarray(deepcopy(gl.getDepth()), np.float64)
+
+        if self.overdraw:
+            gl.PolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            draw_noncolored_verts(gl, self.camera.v.r, self.f)
+            overdraw = np.asarray(deepcopy(gl.getDepth()), np.float64)
+            gl.PolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+            boundarybool_image = self.boundarybool_image
+            result = overdraw*boundarybool_image + result*(1-boundarybool_image)
+        gl.Disable(GL_CULL_FACE)
+        result = result.reshape((self.frustum['height'], self.frustum['width']))
+        return result
+
+    @depends_on('f', 'frustum', 'background_image','overdraw','camera', 'v')
+    def depth_surface(self):
+        """Returns 4-channeled image, in which first two channels are depth maps
+        for front and back side. The next two channels is image mask (duplicated twice)
+        """
+        depthmap_front = self.depth_map_front * -1
+        depthmap_back = self.depth_map_back * -1
+        depthmap_front[~self.mask] = np.nan
+        depthmap_back[~self.mask] = np.nan
+
+        max_value = np.max((np.nanmax(depthmap_front), np.nanmax(depthmap_back)))
+        min_value = np.min((np.nanmin(depthmap_front), np.nanmin(depthmap_back)))
+
+        depth_surface = np.zeros(depthmap_front.shape[:2] + (4,))
+        depth_surface[:, :, 0] = depthmap_front
+        depth_surface[:, :, 1] = depthmap_back
+        depth_surface = (depth_surface - min_value) / (max_value - min_value)
+        depth_surface[:, :, 2:] = self.mask.astype(float)[:, :, None]
+
+        # FIXME: Temporary. Making image BGR, since saving is RGB now. All algos are used to reading BGR
+        depth_surface = depth_surface[:, :, [2, 1, 0, 3]]
+
+        return depth_surface
 
 
 def draw_edge_visibility(gl, v, e, f, hidden_wireframe=True):
