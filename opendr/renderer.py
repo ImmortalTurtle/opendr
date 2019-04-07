@@ -682,6 +682,7 @@ class MapsRenderer(ColoredRenderer):
         """Returns 4-channeled image, in which the first two channels are depth maps
         for front and back side. The next two channels is image mask (duplicated twice)
         """
+        _ = self.r
         v_rendered = self.camera.r
 
         depthmap_front = self.depth_map_front
