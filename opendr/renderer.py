@@ -598,6 +598,7 @@ class TexturedRenderer(ColoredRenderer):
 class MapsRenderer(ColoredRenderer):
     def __init__(self, *args, **kwargs):
         super(MapsRenderer, self).__init__(*args, **kwargs)
+        self.transforms = []
 
     @depends_on('f', 'frustum', 'background_image', 'overdraw', 'num_channels', 'vc', 'camera', 'bgcolor')
     def mask(self):
@@ -678,25 +679,40 @@ class MapsRenderer(ColoredRenderer):
 
     @depends_on('f', 'frustum', 'background_image','overdraw','camera', 'v')
     def depth_surface(self):
-        """Returns 4-channeled image, in which first two channels are depth maps
+        """Returns 4-channeled image, in which the first two channels are depth maps
         for front and back side. The next two channels is image mask (duplicated twice)
         """
-        depthmap_front = self.depth_map_front * -1
-        depthmap_back = self.depth_map_back * -1
+        v_rendered = self.camera.r
+
+        depthmap_front = self.depth_map_front
+        depthmap_back = self.depth_map_back
         depthmap_front[~self.mask] = np.nan
         depthmap_back[~self.mask] = np.nan
 
         max_value = np.max((np.nanmax(depthmap_front), np.nanmax(depthmap_back)))
         min_value = np.min((np.nanmin(depthmap_front), np.nanmin(depthmap_back)))
 
-        depth_surface = np.zeros(depthmap_front.shape[:2] + (4,))
+        depth_surface = np.zeros(depthmap_front.shape[:2] + (4,), dtype=float)
         depth_surface[:, :, 0] = depthmap_front
         depth_surface[:, :, 1] = depthmap_back
-        depth_surface = (depth_surface - min_value) / (max_value - min_value)
         depth_surface[:, :, 2:] = self.mask.astype(float)[:, :, None]
 
-        # FIXME: Temporary. Making image BGR, since saving is RGB now. All algos are used to reading BGR
-        depth_surface = depth_surface[:, :, [2, 1, 0, 3]]
+        # Collect transforms
+        depth_transforms = [('*', -1), ('-', -max_value), ('/', max_value - min_value)]
+        self.transforms.extend([('z',) + transf for transf in depth_transforms])
+
+        min_rendered, max_rendered = v_rendered.min(axis=0), v_rendered.max(axis=0)
+        argmin_rendered, argmax_rendered = v_rendered.argmin(axis=0), v_rendered.argmax(axis=0)
+        assert min_rendered.shape == (2,) and max_rendered.shape == (2,), (min_rendered, max_rendered)
+        assert argmin_rendered.shape == (2,), (argmin_rendered, argmin_rendered.shape)
+        min_v, max_v = self.camera.v.r[argmin_rendered, [0, 1]], self.camera.v.r[argmax_rendered, [0, 1]]
+        assert min_v.shape == (2,), (min_v, min_v.shape)
+        assert np.all(max_v > min_v), (min_v, max_v)
+        xy_transf = [('x', '-', min_v[0]), ('y', '-', min_v[1]),]
+        xy_transf.append(('x', '*', (max_rendered[0] - min_rendered[0]) / (max_v[0] - min_v[0])))
+        xy_transf.append(('y', '*', (max_rendered[1] - min_rendered[1]) / (max_v[1] - min_v[1])))
+        xy_transf.extend([('x', '+', min_rendered[0]), ('y', '+', min_rendered[1]),])
+        self.transforms.extend(xy_transf)
 
         return depth_surface
 
@@ -753,9 +769,6 @@ class MapsRenderer(ColoredRenderer):
         bary_map = self.barycentric_front_image if is_front else self.barycentric_back_image
         faces_map = self.faces_front_image if is_front else self.faces_back_image
         image = np.concatenate((faces_map[:, :, :2], bary_map[:, :, [1, 2]]), axis=2)
-
-        # FIXME: Temporary. Making image BGR, since saving is RGB now. All algos are used to reading BGR
-        image = image[:, :, [2, 1, 0, 3]]
 
         return image
 
