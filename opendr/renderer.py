@@ -604,39 +604,41 @@ class MapsRenderer(ColoredRenderer):
     def mask(self):
         return ~np.all(self.r == self.bgcolor.r, axis=2)
 
-    def draw_normal_image(self, normal_colors):
+    def draw_colored_v_cullface(self, f_v_colors):
         """Draws normal map. Certain CullFace mode (BACK / FRONT) must be
         set before calling this function.
         """
         gl = self.glf
         gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         gl.Enable(GL_CULL_FACE)
-        draw_colored_primitives(self.glf, self.v.r.reshape((-1, 3)), self.f, normal_colors)
+        if f_v_colors.shape[0] == self.v.shape[0]:
+            f_v_colors = f_v_colors[self.f.ravel()]
+        draw_colored_primitives(self.glf, self.v.r.reshape((-1, 3)), self.f, f_v_colors)
         gl.Disable(GL_CULL_FACE)
         return np.asarray(deepcopy(self.glf.getImage()), np.float64)
 
     @depends_on('v', 'f', 'frustum', 'camera')
     def normal_front_image(self):
-        _ = self.camera.r
+        _ = self.r
         colors = VertNormals(self.v, self.f).r[self.f.ravel()]
         colors[:, :2] = colors[:, :2] * 0.5 + 0.5
         colors[:, 2] = 1 - colors[:, 2].clip(0, 1)
         self.glf.CullFace(GL_FRONT)
-        image = self.draw_normal_image(colors)
+        image = self.draw_colored_v_cullface(colors)
         return image
 
     @depends_on('v', 'f', 'frustum', 'camera')
     def normal_back_image(self):
-        _ = self.camera.r
+        _ = self.r
         colors = VertNormals(self.v, self.f).r[self.f.ravel()]
         colors[:, :2] = colors[:, :2] * 0.5 + 0.5
         colors[:, 2] = colors[:, 2].clip(-1, 0) + 1
         self.glf.CullFace(GL_BACK)
-        return self.draw_normal_image(colors)
+        return self.draw_colored_v_cullface(colors)
 
     @depends_on('f', 'frustum', 'background_image','overdraw','camera', 'v')
     def depth_map_front(self):
-        _ = self.camera.r
+        _ = self.r
         gl = self.glf
         gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -657,7 +659,7 @@ class MapsRenderer(ColoredRenderer):
 
     @depends_on('f', 'frustum', 'background_image','overdraw','camera', 'v')
     def depth_map_back(self):
-        _ = self.camera.r
+        _ = self.r
         gl = self.glf
         gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -737,7 +739,7 @@ class MapsRenderer(ColoredRenderer):
         In the case when there are more than 65535 faces, information will be lost
         """
         self._call_on_changed()
-        tmp = self.camera.r
+        _ = self.r
         colors = np.hstack((np.arange(self.f.shape[0])[:, np.newaxis],
                             np.arange(self.f.shape[0])[:, np.newaxis],
                             np.zeros((self.f.shape[0], 1)))).astype(int)
@@ -750,7 +752,7 @@ class MapsRenderer(ColoredRenderer):
     @depends_on('f', 'frustum', 'camera', 'overdraw')
     def faces_back_image(self):
         self._call_on_changed()
-        tmp = self.camera.r
+        _ = self.r
         colors = np.hstack((np.arange(self.f.shape[0])[:, np.newaxis],
                             np.arange(self.f.shape[0])[:, np.newaxis],
                             np.zeros((self.f.shape[0], 1)))).astype(int)
@@ -773,6 +775,40 @@ class MapsRenderer(ColoredRenderer):
 
         return image
 
+    def colored_v_front(self, v_colors):
+        self.glf.CullFace(GL_FRONT)
+        image = self.render_v_values(v_colors)
+        return image
+
+    def colored_v_back(self, v_colors):
+        self.glf.CullFace(GL_BACK)
+        image = self.render_v_values(v_colors)
+        return image
+
+    def render_v_values(self, v_values):
+        _ = self.r
+        coef, min_value = None, None
+        if not (0 <= v_values.min() and v_values.max() <= 1.):
+             min_value = v_values.min()
+             v_values -= min_value
+             coef = v_values.max()
+             v_values /= coef
+        if v_values.shape[1] > 3:
+            # split into multiple 3d arrays
+            arrays = []
+            for start_ind in range(0, v_values.shape[1], 3):
+                additional_amount = 0 if start_ind + 3 <= v_values.shape[1] \
+                                      else 3 - (v_values.shape[1] - start_ind)
+                array = v_values[:, start_ind:start_ind+3]
+                array = np.hstack((array,) + (np.zeros_like(array[:, [1]]),) * additional_amount)
+                arrays.append(self.draw_colored_v_cullface(array))
+            rendered = np.concatenate(arrays, axis=2)
+        else:
+            rendered = self.draw_colored_v_cullface(v_colors)
+
+        if coef or min_value:
+            rendered = (rendered * coefs) + min_value
+        return rendered
 
 
 def draw_edge_visibility(gl, v, e, f, hidden_wireframe=True):
